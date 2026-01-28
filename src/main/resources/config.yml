@@ -1,0 +1,38 @@
+openai:
+  api_key: "${OPENAI_API_KEY}" # set via env: export OPENAI_API_KEY="sk-..."
+  model: "gpt-4o"
+  max_blocks: 2500
+  timeout_ms: 20000
+
+build:
+  place_per_tick: 150
+  cooldown_seconds: 30
+  forward_offset_blocks: 3
+  replace_only_air: true
+  allowed_materials:
+    - OAK_PLANKS
+    - OAK_LOG
+    - BIRCH_PLANKS
+    - COBBLESTONE
+    - STONE_BRICKS
+    - GLASS_PANE
+    - GLASS
+    - OAK_STAIRS
+    - OAK_SLAB
+    - COBBLESTONE_STAIRS
+    - TORCH
+    - LANTERN
+    - SEA_LANTERN
+    - GLOWSTONE
+    - PAINTING
+    - ITEM_FRAME
+    - FLOWER_POT
+    - POTTED_OAK_SAPLING
+    - POTTED_POPPY
+    - BOOKSHELF
+    - WHITE_CARPET
+    - RED_CARPET
+    - BANNER
+    - WHITE_BANNER
+    - OAK_FENCE
+    - OAK_FENCE_GATE
