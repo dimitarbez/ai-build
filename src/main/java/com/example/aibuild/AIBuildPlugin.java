@@ -10,9 +10,14 @@ public class AIBuildPlugin extends JavaPlugin {
     public void onEnable() {
         saveDefaultConfig();
 
+        String apiKey = EnvConfig.getOpenAiApiKey();
+        if (apiKey == null) {
+            apiKey = getConfig().getString("openai.api_key");
+        }
+
         this.openAIClient = new OpenAIClient(
-                getConfig().getString("openai.api_key"),
-                getConfig().getString("openai.model", "gpt-5"),
+                apiKey,
+                getConfig().getString("openai.model", "gpt-4o"),
                 getConfig().getInt("openai.timeout_ms", 20000)
         );
 

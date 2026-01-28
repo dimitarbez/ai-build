@@ -1,5 +1,5 @@
 openai:
-  api_key: "${OPENAI_API_KEY}" # set via env: export OPENAI_API_KEY="sk-..."
+  api_key: "sk-proj-PUT_YOUR_ACTUAL_KEY_HERE" # Replace with your OpenAI API key
   model: "gpt-4o"
   max_blocks: 2500
   timeout_ms: 20000
