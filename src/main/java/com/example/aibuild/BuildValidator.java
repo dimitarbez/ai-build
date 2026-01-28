@@ -26,23 +26,20 @@ public class BuildValidator {
             blockSet.add(key(b.dx, b.dy, b.dz));
         }
 
-        // Foundation must be fully filled at dy=0 across footprint
-        for (int x = 0; x < sx; x++) {
-            for (int z = 0; z < sz; z++) {
-                if (!blockSet.contains(key(x, 0, z))) {
-                    return "Invalid foundation gap at " + x + ",0," + z;
-                }
+        // Check: at least one foundation block must exist
+        boolean hasFoundation = false;
+        for (var b : plan.blocks) {
+            if (b.dy == 0) {
+                hasFoundation = true;
+                break;
             }
+        }
+        if (!hasFoundation) {
+            return "No foundation blocks (at least one block at dy=0 required)";
         }
 
-        // No floating blocks: any dy>0 must have a block directly below
-        for (var b : plan.blocks) {
-            if (b.dy > 0) {
-                if (!blockSet.contains(key(b.dx, b.dy - 1, b.dz))) {
-                    return "Floating block at " + b.dx + "," + b.dy + "," + b.dz;
-                }
-            }
-        }
+        // Allow architectural features like overhangs, balconies, archways
+        // Don't validate floating blocks - AI can create complex structures
 
         return null;
     }

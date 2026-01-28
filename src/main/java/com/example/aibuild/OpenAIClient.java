@@ -10,6 +10,8 @@ import org.bukkit.Material;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.*;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -103,14 +105,43 @@ public class OpenAIClient {
         CountDownLatch done = new CountDownLatch(1);
         StringBuilder text = new StringBuilder();
         AtomicReference<IOException> error = new AtomicReference<>(null);
-        AtomicInteger progressStage = new AtomicInteger(0);
+        AtomicInteger animFrame = new AtomicInteger(0);
+        AtomicReference<Boolean> started = new AtomicReference<>(false);
+        
+        String[] animMessages = {
+            "⚒ Gathering materials...",
+            "⚒ Crafting blocks...",
+            "⚒ Assembling structure..."
+        };
+
+        // Recurring animation timer
+        Timer animTimer = new Timer(true);
+        animTimer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                if (started.get()) {
+                    int frame = animFrame.getAndIncrement();
+                    onProgress.accept(animMessages[frame % animMessages.length]);
+                }
+            }
+        }, 0, 3000); // Update every 3 seconds
 
         EventSourceListener listener = new EventSourceListener() {
             @Override
             public void onEvent(EventSource eventSource, String id, String type, String data) {
                 if (data == null || data.isBlank()) return;
 
-                if ("response.completed".equals(type)) {
+                // Start animation when API responds
+                if ("response.created".equals(type)) {
+                    started.set(true);
+                }
+
+                // If the API signals that output text is done, treat this as completion
+                if ("response.output_text.done".equals(type) || "response.content_part.done".equals(type)) {
+                    onProgress.accept("⚒ Assembling structure...");
+                    // Close the SSE connection immediately to avoid waiting for server-side completion
+                    eventSource.cancel();
+                    animTimer.cancel();
                     done.countDown();
                     return;
                 }
@@ -119,21 +150,13 @@ public class OpenAIClient {
                     String delta = extractDeltaText(data);
                     if (delta != null && !delta.isEmpty()) {
                         text.append(delta);
-
-                        int len = text.length();
-                        if (progressStage.compareAndSet(0, 1)) {
-                            onProgress.accept("AI is sketching the build...");
-                        } else if (len > 400 && progressStage.compareAndSet(1, 2)) {
-                            onProgress.accept("AI is selecting materials...");
-                        } else if (len > 800 && progressStage.compareAndSet(2, 3)) {
-                            onProgress.accept("AI is finalizing the plan...");
-                        }
                     }
                 }
             }
 
             @Override
             public void onFailure(EventSource eventSource, Throwable t, Response response) {
+                animTimer.cancel();
                 String msg = t != null ? t.getMessage() : "Unknown streaming error";
                 if (response != null) {
                     try {
@@ -160,8 +183,10 @@ public class OpenAIClient {
             throw new IOException("OpenAI stream interrupted", e);
         }
 
+        // Close the EventSource proactively as soon as we're done to speed up shutdown
+        es.cancel();
+
         if (!finished) {
-            es.cancel();
             throw new IOException("OpenAI stream timed out");
         }
         if (error.get() != null) throw error.get();
@@ -174,22 +199,30 @@ public class OpenAIClient {
     }
 
     private String buildInstructions(int maxBlocks, String allowedList) {
+        // Create material ID mapping for compact protocol
+        String[] mats = allowedList.split(", ");
+        StringBuilder matMapping = new StringBuilder();
+        for (int i = 0; i < mats.length; i++) {
+            matMapping.append(i).append("=").append(mats[i]);
+            if (i < mats.length - 1) matMapping.append(", ");
+        }
+        
         return "You generate Minecraft building plans as STRICT JSON only.\n" +
-                "Schema:\n" +
+                "OPTIMIZED COMPACT PROTOCOL (70% smaller):\n" +
                 "{\n" +
-                "  \"name\": string,\n" +
-                "  \"size\": {\"x\": int, \"y\": int, \"z\": int},\n" +
-                "  \"blocks\": [{\"dx\": int, \"dy\": int, \"dz\": int, \"material\": string}]\n" +
+                "  \"s\": [x, y, z],\n" +
+                "  \"b\": [[x,y,z,m], [x,y,z,m], ...]\n" +
                 "}\n" +
+                "Where:\n" +
+                "- s = size [width, height, depth]\n" +
+                "- b = blocks array, each block is [x, y, z, material_id]\n" +
+                "- Material IDs: " + matMapping + "\n" +
                 "Rules:\n" +
-                "- blocks.length <= " + maxBlocks + "\n" +
-                "- dx in [0..size.x-1]\n" +
-                "- dy in [0..size.y-1]\n" +
-                "- dz in [0..size.z-1]\n" +
-                "- ALL blocks at dy=0 must form a solid foundation (no gaps)\n" +
-                "- No floating blocks: every block with dy>0 must have a block below it\n" +
-                "- material MUST be one of: " + allowedList + "\n" +
-                "- Output JSON only. No markdown, no commentary.";
+                "- b.length <= " + maxBlocks + "\n" +
+                "- x in [0..s[0]-1], y in [0..s[1]-1], z in [0..s[2]-1]\n" +
+                "- Include foundation blocks at y=0 where structure touches ground\n" +
+                "- Use material IDs only (integers 0-" + (mats.length - 1) + ")\n" +
+                "- Output JSON only. No markdown, no commentary. Use compact format.";
     }
 
     @SuppressWarnings("unchecked")

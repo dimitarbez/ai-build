@@ -73,7 +73,7 @@ public class AIBuildCommand implements CommandExecutor {
         BlockFace facing = yawToCardinal(p.getLocation().getYaw());
         Location origin = base.clone().add(facing.getModX() * forwardOffset, 0, facing.getModZ() * forwardOffset);
 
-        p.sendMessage(ChatColor.GRAY + "Generating build plan...");
+        p.sendMessage(ChatColor.GRAY + "⚒ Generating build plan...");
 
         // network call async
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
@@ -82,10 +82,27 @@ public class AIBuildCommand implements CommandExecutor {
                         userPrompt,
                         maxBlocks,
                         allowed,
-                        msg -> sendSync(p, ChatColor.GRAY + msg)
+                        msg -> sendSync(p, ChatColor.AQUA + msg)
                 );
 
-                BuildPlan plan = gson.fromJson(json, BuildPlan.class);
+                // Parse with lenient mode to handle minor JSON issues
+                BuildPlan plan;
+                try {
+                    com.google.gson.stream.JsonReader reader = new com.google.gson.stream.JsonReader(
+                            new java.io.StringReader(json));
+                    reader.setLenient(true);
+                    plan = gson.fromJson(reader, BuildPlan.class);
+                    
+                    // Expand compact format if present
+                    String[] matArray = allowed.stream().sorted().toArray(String[]::new);
+                    plan.expandCompact(matArray);
+                } catch (Exception parseError) {
+                    plugin.getLogger().warning("JSON parse error: " + parseError.getMessage());
+                    plugin.getLogger().warning("JSON content: " + json.substring(0, Math.min(500, json.length())));
+                    sendErrorSync(p, "Failed to parse AI response: " + parseError.getMessage());
+                    return;
+                }
+
                 if (plan == null || plan.blocks == null || plan.size == null) {
                     sendErrorSync(p, "AI returned invalid plan.");
                     return;
@@ -148,11 +165,37 @@ public class AIBuildCommand implements CommandExecutor {
         return ChatColor.DARK_RED + "[AIBuild] " + ChatColor.RED + message;
     }
 
-    // DTOs matching AI JSON
+    // DTOs matching AI JSON - optimized compact format
     public static class BuildPlan {
         public String name;
         public Size size;
         public List<BlockSpec> blocks;
+        
+        // Compact format parsing
+        public List<Double> s;  // [x, y, z]
+        public List<List<Number>> b;  // [[x,y,z,m], ...]
+        
+        // Convert compact format to legacy format
+        public void expandCompact(String[] materialNames) {
+            if (s != null && b != null) {
+                size = new Size();
+                size.x = s.get(0).intValue();
+                size.y = s.get(1).intValue();
+                size.z = s.get(2).intValue();
+                
+                blocks = new ArrayList<>(b.size());
+                for (List<Number> block : b) {
+                    BlockSpec spec = new BlockSpec();
+                    spec.dx = block.get(0).intValue();
+                    spec.dy = block.get(1).intValue();
+                    spec.dz = block.get(2).intValue();
+                    int matId = block.get(3).intValue();
+                    spec.material = (matId >= 0 && matId < materialNames.length) 
+                        ? materialNames[matId] : materialNames[0];
+                    blocks.add(spec);
+                }
+            }
+        }
     }
 
     public static class Size {
