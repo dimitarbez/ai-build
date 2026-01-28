@@ -1,8 +1,8 @@
 openai:
   api_key: "sk-proj-PUT_YOUR_ACTUAL_KEY_HERE" # Replace with your OpenAI API key
-  model: "gpt-4o"
+  model: "gpt-4o-mini"
   max_blocks: 2500
-  timeout_ms: 20000
+  timeout_ms: 60000
 
 build:
   place_per_tick: 150
