@@ -28,7 +28,7 @@ public class AIBuildCommand implements CommandExecutor {
             return true;
         }
         if (!p.hasPermission("aibuild.use")) {
-            p.sendMessage(ChatColor.RED + "No permission.");
+            sendError(p, "No permission.");
             return true;
         }
         if (args.length == 0) {
@@ -51,7 +51,7 @@ public class AIBuildCommand implements CommandExecutor {
         long waitMs = (cooldownSec * 1000L) - (now - lastAt);
         if (waitMs > 0) {
             long s = (waitMs + 999) / 1000;
-            p.sendMessage(ChatColor.RED + "Cooldown: wait " + s + "s");
+            sendError(p, "Cooldown: wait " + s + "s");
             return true;
         }
 
@@ -78,21 +78,26 @@ public class AIBuildCommand implements CommandExecutor {
         // network call async
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
-                String json = client.generateBuildPlanJson(userPrompt, maxBlocks, allowed);
+                String json = client.generateBuildPlanJsonStreaming(
+                        userPrompt,
+                        maxBlocks,
+                        allowed,
+                        msg -> sendSync(p, ChatColor.GRAY + msg)
+                );
 
                 BuildPlan plan = gson.fromJson(json, BuildPlan.class);
                 if (plan == null || plan.blocks == null || plan.size == null) {
-                    p.sendMessage(ChatColor.RED + "AI returned invalid plan.");
+                    sendErrorSync(p, "AI returned invalid plan.");
                     return;
                 }
                 if (plan.blocks.size() > maxBlocks) {
-                    p.sendMessage(ChatColor.RED + "Plan too large (" + plan.blocks.size() + " blocks).");
+                    sendErrorSync(p, "Plan too large (" + plan.blocks.size() + " blocks).");
                     return;
                 }
 
                 String validationError = BuildValidator.validate(plan);
                 if (validationError != null) {
-                    p.sendMessage(ChatColor.RED + "Invalid AI plan: " + validationError);
+                    sendErrorSync(p, "Invalid AI plan: " + validationError);
                     return;
                 }
 
@@ -112,7 +117,7 @@ public class AIBuildCommand implements CommandExecutor {
                 });
 
             } catch (Exception e) {
-                p.sendMessage(ChatColor.RED + "Error: " + e.getMessage());
+                sendErrorSync(p, "Error: " + e.getMessage());
             }
         });
 
@@ -125,6 +130,22 @@ public class AIBuildCommand implements CommandExecutor {
         if (rot < 135) return BlockFace.WEST;
         if (rot < 225) return BlockFace.NORTH;
         return BlockFace.EAST;
+    }
+
+    private void sendSync(Player player, String message) {
+        plugin.getServer().getScheduler().runTask(plugin, () -> player.sendMessage(message));
+    }
+
+    private void sendError(Player player, String message) {
+        player.sendMessage(formatError(message));
+    }
+
+    private void sendErrorSync(Player player, String message) {
+        sendSync(player, formatError(message));
+    }
+
+    private String formatError(String message) {
+        return ChatColor.DARK_RED + "[AIBuild] " + ChatColor.RED + message;
     }
 
     // DTOs matching AI JSON
