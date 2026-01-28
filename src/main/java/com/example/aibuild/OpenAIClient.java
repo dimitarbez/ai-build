@@ -57,8 +57,8 @@ public class OpenAIClient {
 
         // keep cost down
         Map<String, Object> reasoning = new LinkedHashMap<>();
-        reasoning.put("effort", "low");
-        payload.put("reasoning", reasoning);
+        // reasoning.put("effort", "low");
+        // payload.put("reasoning", reasoning);
 
         RequestBody body = RequestBody.create(gson.toJson(payload), MediaType.parse("application/json"));
         Request req = new Request.Builder()

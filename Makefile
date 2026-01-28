@@ -1,3 +1,3 @@
 # Build .jar with gradle
-build:
-	./gradlew build
+jar:
+	./gradlew clean shadowJar
