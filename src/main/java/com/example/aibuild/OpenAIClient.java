@@ -1,5 +1,6 @@
 package com.example.aibuild;
 
+import com.example.aibuild.exception.OpenAIException;
 import com.google.gson.Gson;
 import okhttp3.*;
 import okhttp3.sse.EventSource;
@@ -30,14 +31,22 @@ public class OpenAIClient {
         this.apiKey = apiKey;
         this.model = model;
 
+        int connectTimeoutMs = 120000;
+        int writeTimeoutMs = 120000;
+        int readTimeoutMs = timeoutMs;
+        int callTimeoutMs = timeoutMs;
+
         this.http = new OkHttpClient.Builder()
-                .callTimeout(Duration.ofMillis(timeoutMs))
+                .connectTimeout(Duration.ofMillis(connectTimeoutMs))
+                .readTimeout(Duration.ofMillis(readTimeoutMs))
+                .writeTimeout(Duration.ofMillis(writeTimeoutMs))
+                .callTimeout(Duration.ofMillis(callTimeoutMs))
                 .build();
     }
 
-    public String generateBuildPlanJson(String userPrompt, int maxBlocks, Set<Material> allowed) throws IOException {
+    public String generateBuildPlanJson(String userPrompt, int maxBlocks, Set<Material> allowed) throws OpenAIException {
         if (apiKey == null || apiKey.isBlank() || apiKey.contains("PUT_YOUR_KEY")) {
-            throw new IOException("OpenAI API key not set in plugins/AIBuild/config.yml");
+            throw new OpenAIException("OpenAI API key not set in plugins/AIBuild/config.yml");
         }
 
         String allowedList = allowed.stream().map(Enum::name).sorted().collect(Collectors.joining(", "));
@@ -47,11 +56,6 @@ public class OpenAIClient {
         payload.put("model", model);
         payload.put("instructions", instructions);
         payload.put("input", userPrompt);
-
-        // keep cost down
-        Map<String, Object> reasoning = new LinkedHashMap<>();
-        // reasoning.put("effort", "low");
-        // payload.put("reasoning", reasoning);
 
         RequestBody body = RequestBody.create(gson.toJson(payload), MediaType.parse("application/json"));
         Request req = new Request.Builder()
@@ -64,13 +68,15 @@ public class OpenAIClient {
         try (Response res = http.newCall(req).execute()) {
             String raw = res.body() != null ? res.body().string() : "";
             if (!res.isSuccessful()) {
-                throw new IOException("OpenAI error: HTTP " + res.code() + " " + raw);
+                throw new OpenAIException("OpenAI API error: HTTP " + res.code() + " " + raw, res.code());
             }
-            String extracted = extractTextFromResponsesApi(raw);
+            String extracted = extractTextFromChatApi(raw);
             if (extracted == null || extracted.isBlank()) {
-                throw new IOException("OpenAI returned empty text output. Raw: " + raw);
+                throw new OpenAIException("OpenAI returned empty text output. Raw: " + raw);
             }
             return extracted.trim();
+        } catch (java.io.IOException e) {
+            throw new OpenAIException("Network error calling OpenAI API", e);
         }
     }
 
@@ -79,9 +85,9 @@ public class OpenAIClient {
             int maxBlocks,
             Set<Material> allowed,
             Consumer<String> onProgress
-    ) throws IOException {
+    ) throws OpenAIException {
         if (apiKey == null || apiKey.isBlank() || apiKey.contains("PUT_YOUR_KEY")) {
-            throw new IOException("OpenAI API key not set in plugins/AIBuild/config.yml");
+            throw new OpenAIException("OpenAI API key not set in plugins/AIBuild/config.yml");
         }
 
         String allowedList = allowed.stream().map(Enum::name).sorted().collect(Collectors.joining(", "));
@@ -104,7 +110,7 @@ public class OpenAIClient {
 
         CountDownLatch done = new CountDownLatch(1);
         StringBuilder text = new StringBuilder();
-        AtomicReference<IOException> error = new AtomicReference<>(null);
+        AtomicReference<OpenAIException> error = new AtomicReference<>(null);
         AtomicInteger animFrame = new AtomicInteger(0);
         AtomicReference<Boolean> started = new AtomicReference<>(false);
         
@@ -128,45 +134,55 @@ public class OpenAIClient {
 
         EventSourceListener listener = new EventSourceListener() {
             @Override
+            public void onOpen(EventSource eventSource, Response response) {
+                // Connection established - stream is starting
+            }
+
+            @Override
             public void onEvent(EventSource eventSource, String id, String type, String data) {
-                if (data == null || data.isBlank()) return;
-
-                // Start animation when API responds
-                if ("response.created".equals(type)) {
-                    started.set(true);
-                }
-
-                // If the API signals that output text is done, treat this as completion
-                if ("response.output_text.done".equals(type) || "response.content_part.done".equals(type)) {
-                    onProgress.accept("⚒ Assembling structure...");
-                    // Close the SSE connection immediately to avoid waiting for server-side completion
-                    eventSource.cancel();
-                    animTimer.cancel();
-                    done.countDown();
+                if (data == null || data.isBlank() || "[DONE]".equals(data)) {
+                    if ("[DONE]".equals(data)) {
+                        eventSource.cancel();
+                        animTimer.cancel();
+                        done.countDown();
+                    }
                     return;
                 }
 
-                if (type != null && type.startsWith("response.output_text")) {
-                    String delta = extractDeltaText(data);
-                    if (delta != null && !delta.isEmpty()) {
-                        text.append(delta);
-                    }
+                // Start animation on first data
+                if (!started.get()) {
+                    started.set(true);
                 }
+
+                // Extract content delta from Responses API streaming format
+                String delta = extractDeltaText(data);
+                if (delta != null && !delta.isEmpty()) {
+                    text.append(delta);
+                }
+            }
+
+            @Override
+            public void onClosed(EventSource eventSource) {
+                // Stream closed normally - finish processing
+                animTimer.cancel();
+                done.countDown();
             }
 
             @Override
             public void onFailure(EventSource eventSource, Throwable t, Response response) {
                 animTimer.cancel();
                 String msg = t != null ? t.getMessage() : "Unknown streaming error";
+                int code = -1;
                 if (response != null) {
+                    code = response.code();
                     try {
                         String body = response.body() != null ? response.body().string() : "";
-                        msg = "HTTP " + response.code() + ": " + (body.isBlank() ? response.message() : body);
+                        msg = (body.isBlank() ? response.message() : body);
                     } catch (Exception e) {
-                        msg = "HTTP " + response.code() + ": " + response.message();
+                        msg = response.message();
                     }
                 }
-                error.set(new IOException("OpenAI stream error: " + msg));
+                error.set(new OpenAIException("OpenAI stream error: " + msg, code));
                 done.countDown();
             }
         };
@@ -180,20 +196,20 @@ public class OpenAIClient {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             es.cancel();
-            throw new IOException("OpenAI stream interrupted", e);
+            throw new OpenAIException("OpenAI stream interrupted", e);
         }
 
         // Close the EventSource proactively as soon as we're done to speed up shutdown
         es.cancel();
 
         if (!finished) {
-            throw new IOException("OpenAI stream timed out");
+            throw new OpenAIException("OpenAI stream timed out");
         }
         if (error.get() != null) throw error.get();
 
         String extracted = text.toString().trim();
         if (extracted.isBlank()) {
-            throw new IOException("OpenAI returned empty streaming output.");
+            throw new OpenAIException("OpenAI returned empty streaming output.");
         }
         return extracted;
     }
@@ -230,52 +246,38 @@ public class OpenAIClient {
         Object rootObj = gson.fromJson(rawJson, Object.class);
         if (!(rootObj instanceof Map<?, ?> root)) return null;
 
-        Object delta = root.get("delta");
-        if (delta instanceof String s && !s.isBlank()) return s;
-
-        Object text = root.get("text");
-        if (text instanceof String s2 && !s2.isBlank()) return s2;
+        // Responses API streaming format: {"type":"response.output_text.delta","delta":"..."}
+        Object type = root.get("type");
+        if ("response.output_text.delta".equals(type)) {
+            Object delta = root.get("delta");
+            if (delta instanceof String s) return s;
+        }
 
         return null;
     }
 
     @SuppressWarnings("unchecked")
-    private String extractTextFromResponsesApi(String rawJson) {
+    private String extractTextFromChatApi(String rawJson) {
         Object rootObj = gson.fromJson(rawJson, Object.class);
         if (!(rootObj instanceof Map<?, ?> root)) return null;
 
-        // Some SDKs include output_text convenience
-        Object outputText = root.get("output_text");
-        if (outputText instanceof String s && !s.isBlank()) return s;
-
-        // Typical structure: { output: [ { content: [ { type:"output_text", text:"..." } ] } ] }
-        Object output = root.get("output");
-        if (output instanceof List<?> outList) {
-            for (Object item : outList) {
-                if (!(item instanceof Map<?, ?> outItem)) continue;
-                Object content = outItem.get("content");
-                if (!(content instanceof List<?> contentList)) continue;
-
-                for (Object c : contentList) {
-                    if (!(c instanceof Map<?, ?> cm)) continue;
-
-                    Object type = cm.get("type");
-                    if (type instanceof String ts && ts.equalsIgnoreCase("output_text")) {
-                        Object text = cm.get("text");
-                        if (text instanceof String s && !s.isBlank()) return s;
+        // Responses API format: {"response":{"output":[{"content":[{"text":"..."}]}]}}
+        Object response = root.get("response");
+        if (response instanceof Map<?, ?> responseMap) {
+            Object output = responseMap.get("output");
+            if (output instanceof List<?> outputList && !outputList.isEmpty()) {
+                Object firstOutput = outputList.get(0);
+                if (firstOutput instanceof Map<?, ?> outputItem) {
+                    Object content = outputItem.get("content");
+                    if (content instanceof List<?> contentList && !contentList.isEmpty()) {
+                        Object firstContent = contentList.get(0);
+                        if (firstContent instanceof Map<?, ?> contentItem) {
+                            Object text = contentItem.get("text");
+                            if (text instanceof String s && !s.isBlank()) return s;
+                        }
                     }
-
-                    // fallback: if it just has "text"
-                    Object text = cm.get("text");
-                    if (text instanceof String s && !s.isBlank()) return s;
                 }
             }
-        }
-
-        // last resort: maybe it's directly in "response" or similar
-        for (String k : List.of("text", "content")) {
-            Object v = root.get(k);
-            if (v instanceof String s && !s.isBlank()) return s;
         }
 
         return null;

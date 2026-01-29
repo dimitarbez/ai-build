@@ -1,5 +1,7 @@
 package com.example.aibuild;
 
+import com.example.aibuild.model.BuildPlan;
+import com.example.aibuild.model.BlockSpec;
 import org.bukkit.*;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
@@ -14,25 +16,32 @@ public class BlockPlacer {
             JavaPlugin plugin,
             Location origin,
             BlockFace facing,
-            AIBuildCommand.BuildPlan plan,
+            BuildPlan plan,
             Set<Material> allowed,
             int placePerTick,
             boolean replaceOnlyAir,
             Player player,
             BuildHistory history
     ) {
-        List<AIBuildCommand.BlockSpec> blocks = plan.blocks;
+        List<BlockSpec> blocks = plan.blocks;
         Deque<BuildHistory.PlacedBlock> placed = new ArrayDeque<>(blocks.size());
+        
+        // Pre-cache origin coordinates to avoid repeated access
+        World world = origin.getWorld();
+        int originX = origin.getBlockX();
+        int originY = origin.getBlockY();
+        int originZ = origin.getBlockZ();
 
         new org.bukkit.scheduler.BukkitRunnable() {
             int idx = 0;
+            long lastProgressMs = System.currentTimeMillis();
 
             @Override
             public void run() {
                 int end = Math.min(idx + placePerTick, blocks.size());
 
                 for (int i = idx; i < end; i++) {
-                    AIBuildCommand.BlockSpec b = blocks.get(i);
+                    BlockSpec b = blocks.get(i);
 
                     Material m = safeMaterial(b.material, allowed);
                     if (m == null) continue;
@@ -41,22 +50,40 @@ public class BlockPlacer {
                     int rdx = xz[0];
                     int rdz = xz[1];
 
-                    Location at = origin.clone().add(rdx, b.dy, rdz);
-                    Block block = at.getBlock();
+                    // Minimize Location allocations - get block directly by coordinates
+                    int blockX = originX + rdx;
+                    int blockY = originY + b.dy;
+                    int blockZ = originZ + rdz;
+                    
+                    Block block = world.getBlockAt(blockX, blockY, blockZ);
 
                     if (replaceOnlyAir && block.getType() != Material.AIR) continue;
 
                     Material prev = block.getType();
                     if (prev == m) continue;
 
-                    block.setType(m, false);
-                    placed.addLast(new BuildHistory.PlacedBlock(at.clone(), prev));
+                    block.setType(m, true); // Enable physics so blocks behave normally
+                    // Only create Location for history when actually placing a block
+                    placed.addLast(new BuildHistory.PlacedBlock(
+                        new Location(world, blockX, blockY, blockZ), prev
+                    ));
                 }
 
                 idx = end;
+                
+                // Show progress every 5 seconds
+                long now = System.currentTimeMillis();
+                if (now - lastProgressMs > 5000 && idx < blocks.size()) {
+                    int percent = (idx * 100) / blocks.size();
+                    player.sendMessage(ChatColor.GRAY + "⚒ Building... " + percent + "% (" + idx + "/" + blocks.size() + " blocks)");
+                    lastProgressMs = now;
+                }
+                
                 if (idx >= blocks.size()) {
                     history.store(player.getUniqueId(), placed);
-                    player.sendMessage(ChatColor.GREEN + "Build complete: " + (plan.name != null ? plan.name : "AI build"));
+                    int totalPlaced = placed.size();
+                    player.sendMessage(ChatColor.GREEN + "✓ Build complete: " + totalPlaced + " blocks placed" + 
+                        (plan.name != null ? " (" + plan.name + ")" : ""));
                     cancel();
                 }
             }
@@ -76,7 +103,7 @@ public class BlockPlacer {
                 int n = 0;
                 while (n < placePerTick && !last.isEmpty()) {
                     BuildHistory.PlacedBlock pb = last.removeLast(); // reverse order
-                    pb.loc().getBlock().setType(pb.previous(), false);
+                    pb.loc().getBlock().setType(pb.previous(), true); // Enable physics for undo too
                     n++;
                 }
                 if (last.isEmpty()) {
