@@ -25,6 +25,12 @@ public class BlockPlacer {
     ) {
         List<BlockSpec> blocks = plan.blocks;
         Deque<BuildHistory.PlacedBlock> placed = new ArrayDeque<>(blocks.size());
+        
+        // Pre-cache origin coordinates to avoid repeated access
+        World world = origin.getWorld();
+        int originX = origin.getBlockX();
+        int originY = origin.getBlockY();
+        int originZ = origin.getBlockZ();
 
         new org.bukkit.scheduler.BukkitRunnable() {
             int idx = 0;
@@ -43,8 +49,12 @@ public class BlockPlacer {
                     int rdx = xz[0];
                     int rdz = xz[1];
 
-                    Location at = origin.clone().add(rdx, b.dy, rdz);
-                    Block block = at.getBlock();
+                    // Minimize Location allocations - get block directly by coordinates
+                    int blockX = originX + rdx;
+                    int blockY = originY + b.dy;
+                    int blockZ = originZ + rdz;
+                    
+                    Block block = world.getBlockAt(blockX, blockY, blockZ);
 
                     if (replaceOnlyAir && block.getType() != Material.AIR) continue;
 
@@ -52,7 +62,10 @@ public class BlockPlacer {
                     if (prev == m) continue;
 
                     block.setType(m, false);
-                    placed.addLast(new BuildHistory.PlacedBlock(at.clone(), prev));
+                    // Only create Location for history when actually placing a block
+                    placed.addLast(new BuildHistory.PlacedBlock(
+                        new Location(world, blockX, blockY, blockZ), prev
+                    ));
                 }
 
                 idx = end;

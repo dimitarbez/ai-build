@@ -6,6 +6,7 @@ import com.example.aibuild.exception.PlanParseException;
 import com.example.aibuild.model.BuildPlan;
 import com.example.aibuild.service.ConfigService;
 import com.example.aibuild.service.PlanParser;
+import com.example.aibuild.util.DebugTimer;
 import org.bukkit.*;
 import org.bukkit.block.BlockFace;
 import org.bukkit.command.*;
@@ -79,23 +80,20 @@ public class AIBuildCommand implements CommandExecutor {
 
         p.sendMessage(ChatColor.GRAY + "⚒ Generating build plan...");
 
-        long startTime = System.currentTimeMillis();
+        boolean debugEnabled = config.isDebugLoggingEnabled();
+        DebugTimer totalTimer = DebugTimer.start(logger, debugEnabled, "Total build generation");
 
         // network call async
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
-                long apiStart = System.currentTimeMillis();
+                DebugTimer apiTimer = DebugTimer.start(logger, debugEnabled, "OpenAI API call");
                 String json = client.generateBuildPlanJsonStreaming(
                         userPrompt,
                         maxBlocks,
                         allowed,
                         msg -> sendSync(p, ChatColor.AQUA + msg)
                 );
-                long apiDuration = System.currentTimeMillis() - apiStart;
-
-                if (config.isDebugLoggingEnabled()) {
-                    logger.info(String.format("OpenAI API call took %dms", apiDuration));
-                }
+                apiTimer.stop();
 
                 // Parse with material names for compact format
                 String[] matArray = allowed.stream()
@@ -103,6 +101,7 @@ public class AIBuildCommand implements CommandExecutor {
                         .sorted()
                         .toArray(String[]::new);
                 
+                DebugTimer parseTimer = DebugTimer.start(logger, debugEnabled, "JSON parsing");
                 BuildPlan plan;
                 try {
                     plan = planParser.parse(json, matArray);
@@ -114,6 +113,7 @@ public class AIBuildCommand implements CommandExecutor {
                     sendErrorSync(p, "Failed to parse AI response");
                     return;
                 }
+                parseTimer.stop();
 
                 if (plan == null || plan.blocks == null || plan.size == null) {
                     logger.warning("AI returned invalid plan structure");
@@ -129,6 +129,7 @@ public class AIBuildCommand implements CommandExecutor {
                     return;
                 }
 
+                DebugTimer validationTimer = DebugTimer.start(logger, debugEnabled, "Plan validation");
                 try {
                     BuildValidator.validate(plan);
                 } catch (BuildValidationException e) {
@@ -136,12 +137,10 @@ public class AIBuildCommand implements CommandExecutor {
                     sendErrorSync(p, "Invalid plan: " + e.getMessage());
                     return;
                 }
+                validationTimer.stop();
 
-                long totalTime = System.currentTimeMillis() - startTime;
-                if (config.isDebugLoggingEnabled()) {
-                    logger.info(String.format("Build plan validated: %d blocks in %dx%dx%d (total %dms)", 
-                        plan.blocks.size(), plan.size.x, plan.size.y, plan.size.z, totalTime));
-                }
+                totalTimer.stop(String.format("%d blocks in %dx%dx%d", 
+                    plan.blocks.size(), plan.size.x, plan.size.y, plan.size.z));
 
                 // place on main thread
                 plugin.getServer().getScheduler().runTask(plugin, () -> {
