@@ -68,4 +68,15 @@ public final class EnvConfig {
     public static String getOpenAiApiKey() {
         return get("OPENAI_API_KEY");
     }
+
+    /** Convenience accessor for OpenAI timeout in milliseconds. */
+    public static Integer getOpenAiTimeoutMs() {
+        String v = get("OPENAI_TIMEOUT_MS");
+        if (v == null) return null;
+        try {
+            return Integer.parseInt(v);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
 }

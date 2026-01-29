@@ -1,11 +1,13 @@
 openai:
-  api_key: "sk-proj-PUT_YOUR_ACTUAL_KEY_HERE" # Replace with your OpenAI API key
+  # Set your OpenAI API key here (get it from https://platform.openai.com/api-keys)
+  # Example: api_key: "sk-proj-abc123..."
+  api_key: "YOUR_OPENAI_API_KEY_HERE"
   model: "gpt-4o-mini"
   max_blocks: 500  # Reduced for faster generation
-  timeout_ms: 60000
+  timeout_ms: 120000
 
 build:
-  place_per_tick: 150
+  place_per_tick: 250  # Increased for faster building (was 150)
   cooldown_seconds: 30
   forward_offset_blocks: 3
   replace_only_air: true

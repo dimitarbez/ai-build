@@ -34,6 +34,7 @@ public class BlockPlacer {
 
         new org.bukkit.scheduler.BukkitRunnable() {
             int idx = 0;
+            long lastProgressMs = System.currentTimeMillis();
 
             @Override
             public void run() {
@@ -61,7 +62,7 @@ public class BlockPlacer {
                     Material prev = block.getType();
                     if (prev == m) continue;
 
-                    block.setType(m, false);
+                    block.setType(m, true); // Enable physics so blocks behave normally
                     // Only create Location for history when actually placing a block
                     placed.addLast(new BuildHistory.PlacedBlock(
                         new Location(world, blockX, blockY, blockZ), prev
@@ -69,9 +70,20 @@ public class BlockPlacer {
                 }
 
                 idx = end;
+                
+                // Show progress every 5 seconds
+                long now = System.currentTimeMillis();
+                if (now - lastProgressMs > 5000 && idx < blocks.size()) {
+                    int percent = (idx * 100) / blocks.size();
+                    player.sendMessage(ChatColor.GRAY + "⚒ Building... " + percent + "% (" + idx + "/" + blocks.size() + " blocks)");
+                    lastProgressMs = now;
+                }
+                
                 if (idx >= blocks.size()) {
                     history.store(player.getUniqueId(), placed);
-                    player.sendMessage(ChatColor.GREEN + "Build complete: " + (plan.name != null ? plan.name : "AI build"));
+                    int totalPlaced = placed.size();
+                    player.sendMessage(ChatColor.GREEN + "✓ Build complete: " + totalPlaced + " blocks placed" + 
+                        (plan.name != null ? " (" + plan.name + ")" : ""));
                     cancel();
                 }
             }
@@ -91,7 +103,7 @@ public class BlockPlacer {
                 int n = 0;
                 while (n < placePerTick && !last.isEmpty()) {
                     BuildHistory.PlacedBlock pb = last.removeLast(); // reverse order
-                    pb.loc().getBlock().setType(pb.previous(), false);
+                    pb.loc().getBlock().setType(pb.previous(), true); // Enable physics for undo too
                     n++;
                 }
                 if (last.isEmpty()) {

@@ -14,7 +14,7 @@ public class OpenAIException extends IOException {
     }
     
     public OpenAIException(String message, int httpCode) {
-        super(message, httpCode);
+        super(message);
         this.httpCode = httpCode;
     }
     

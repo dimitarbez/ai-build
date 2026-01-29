@@ -1,5 +1,6 @@
 package com.example.aibuild.service;
 
+import com.example.aibuild.EnvConfig;
 import org.bukkit.Material;
 import org.bukkit.configuration.file.FileConfiguration;
 
@@ -59,7 +60,9 @@ public class ConfigService {
     }
     
     public int getTimeoutMs() {
-        return config.getInt("openai.timeout_ms", 20000);
+        Integer envTimeout = EnvConfig.getOpenAiTimeoutMs();
+        if (envTimeout != null) return envTimeout;
+        return config.getInt("openai.timeout_ms", 120000);
     }
     
     public boolean isDebugLoggingEnabled() {

@@ -35,6 +35,9 @@ dependencies {
     testImplementation 'com.squareup.okhttp3:okhttp-sse:4.12.0'
     testImplementation 'com.google.code.gson:gson:2.10.1'
     testImplementation 'io.papermc.paper:paper-api:1.20.1-R0.1-SNAPSHOT'
+    
+    // Kotlin stdlib required by OkHttp at runtime
+    testImplementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.22'
 }
 
 tasks.withType(JavaCompile) {
@@ -67,3 +70,11 @@ shadowJar {
 }
 
 build.dependsOn shadowJar
+
+// Task to run E2E integration tests
+task runE2ETest(type: JavaExec) {
+    group = 'verification'
+    description = 'Runs end-to-end integration tests'
+    classpath = sourceSets.test.runtimeClasspath + sourceSets.main.runtimeClasspath
+    mainClass = 'com.example.aibuild.E2EIntegrationTest'
+}

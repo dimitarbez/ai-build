@@ -14,9 +14,23 @@ public class AIBuildPlugin extends JavaPlugin {
 
         this.configService = new ConfigService(getConfig());
 
-        String apiKey = EnvConfig.getOpenAiApiKey();
-        if (apiKey == null) {
-            apiKey = configService.getApiKey();
+        // Priority: 1) config.yml (for production), 2) env var (for development)
+        String apiKey = configService.getApiKey();
+        if (apiKey == null || apiKey.isBlank() || isPlaceholder(apiKey)) {
+            getLogger().warning("API key not found in config.yml, checking environment variables...");
+            apiKey = EnvConfig.getOpenAiApiKey();
+        }
+
+        // Validate API key
+        if (apiKey == null || apiKey.isBlank() || isPlaceholder(apiKey)) {
+            getLogger().severe("========================================");
+            getLogger().severe("ERROR: OpenAI API key not configured!");
+            getLogger().severe("Please edit plugins/AIBuild/config.yml");
+            getLogger().severe("and set your API key in the 'openai.api_key' field.");
+            getLogger().severe("Get your API key from: https://platform.openai.com/api-keys");
+            getLogger().severe("========================================");
+            getServer().getPluginManager().disablePlugin(this);
+            return;
         }
 
         this.openAIClient = new OpenAIClient(
@@ -33,6 +47,15 @@ public class AIBuildPlugin extends JavaPlugin {
             );
         }
 
-        getLogger().info("AIBuild v2 enabled.");
+        getLogger().info("AIBuild v2 enabled successfully.");
+        getLogger().info("Using model: " + configService.getModel());
+    }
+
+    private boolean isPlaceholder(String key) {
+        return key.contains("PUT_YOUR") || 
+               key.contains("YOUR_OPENAI") || 
+               key.contains("REPLACE_ME") ||
+               key.equals("sk-...") ||
+               key.length() < 20;
     }
 }
