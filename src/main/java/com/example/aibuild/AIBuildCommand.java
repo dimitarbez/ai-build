@@ -1,24 +1,34 @@
 package com.example.aibuild;
 
-import com.google.gson.Gson;
+import com.example.aibuild.exception.BuildValidationException;
+import com.example.aibuild.exception.OpenAIException;
+import com.example.aibuild.exception.PlanParseException;
+import com.example.aibuild.model.BuildPlan;
+import com.example.aibuild.service.ConfigService;
+import com.example.aibuild.service.PlanParser;
 import org.bukkit.*;
 import org.bukkit.block.BlockFace;
 import org.bukkit.command.*;
 import org.bukkit.entity.Player;
 
 import java.util.*;
-import java.util.stream.Collectors;
+import java.util.logging.Logger;
 
 public class AIBuildCommand implements CommandExecutor {
     private final AIBuildPlugin plugin;
     private final OpenAIClient client;
     private final BuildHistory history;
-    private final Gson gson = new Gson();
+    private final ConfigService config;
+    private final PlanParser planParser;
+    private final Logger logger;
 
-    public AIBuildCommand(AIBuildPlugin plugin, OpenAIClient client, BuildHistory history) {
+    public AIBuildCommand(AIBuildPlugin plugin, OpenAIClient client, BuildHistory history, ConfigService config) {
         this.plugin = plugin;
         this.client = client;
         this.history = history;
+        this.config = config;
+        this.planParser = new PlanParser();
+        this.logger = plugin.getLogger();
     }
 
     @Override
@@ -36,7 +46,7 @@ public class AIBuildCommand implements CommandExecutor {
             return true;
         }
 
-        int placePerTick = plugin.getConfig().getInt("build.place_per_tick", 150);
+        int placePerTick = config.getPlacePerTick();
 
         // /aibuild undo
         if (args.length == 1 && args[0].equalsIgnoreCase("undo")) {
@@ -45,7 +55,7 @@ public class AIBuildCommand implements CommandExecutor {
         }
 
         // cooldown
-        int cooldownSec = plugin.getConfig().getInt("build.cooldown_seconds", 30);
+        int cooldownSec = config.getCooldownSeconds();
         long lastAt = history.getLastBuildAtMs(p.getUniqueId());
         long now = System.currentTimeMillis();
         long waitMs = (cooldownSec * 1000L) - (now - lastAt);
@@ -57,16 +67,10 @@ public class AIBuildCommand implements CommandExecutor {
 
         String userPrompt = String.join(" ", args);
 
-        int maxBlocks = plugin.getConfig().getInt("openai.max_blocks", 2500);
-        boolean replaceOnlyAir = plugin.getConfig().getBoolean("build.replace_only_air", true);
-        int forwardOffset = plugin.getConfig().getInt("build.forward_offset_blocks", 3);
-
-        Set<Material> allowed = plugin.getConfig().getStringList("build.allowed_materials").stream()
-                .map(name -> {
-                    try { return Material.valueOf(name); } catch (Exception e) { return null; }
-                })
-                .filter(Objects::nonNull)
-                .collect(Collectors.toSet());
+        int maxBlocks = config.getMaxBlocks();
+        boolean replaceOnlyAir = config.isReplaceOnlyAir();
+        int forwardOffset = config.getForwardOffset();
+        Set<Material> allowed = config.getAllowedMaterials();
 
         // origin: in front of player
         Location base = p.getLocation().getBlock().getLocation();
@@ -75,47 +79,68 @@ public class AIBuildCommand implements CommandExecutor {
 
         p.sendMessage(ChatColor.GRAY + "⚒ Generating build plan...");
 
+        long startTime = System.currentTimeMillis();
+
         // network call async
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
+                long apiStart = System.currentTimeMillis();
                 String json = client.generateBuildPlanJsonStreaming(
                         userPrompt,
                         maxBlocks,
                         allowed,
                         msg -> sendSync(p, ChatColor.AQUA + msg)
                 );
+                long apiDuration = System.currentTimeMillis() - apiStart;
 
-                // Parse with lenient mode to handle minor JSON issues
+                if (config.isDebugLoggingEnabled()) {
+                    logger.info(String.format("OpenAI API call took %dms", apiDuration));
+                }
+
+                // Parse with material names for compact format
+                String[] matArray = allowed.stream()
+                        .map(Enum::name)
+                        .sorted()
+                        .toArray(String[]::new);
+                
                 BuildPlan plan;
                 try {
-                    com.google.gson.stream.JsonReader reader = new com.google.gson.stream.JsonReader(
-                            new java.io.StringReader(json));
-                    reader.setLenient(true);
-                    plan = gson.fromJson(reader, BuildPlan.class);
-                    
-                    // Expand compact format if present
-                    String[] matArray = allowed.stream().sorted().toArray(String[]::new);
-                    plan.expandCompact(matArray);
-                } catch (Exception parseError) {
-                    plugin.getLogger().warning("JSON parse error: " + parseError.getMessage());
-                    plugin.getLogger().warning("JSON content: " + json.substring(0, Math.min(500, json.length())));
-                    sendErrorSync(p, "Failed to parse AI response: " + parseError.getMessage());
+                    plan = planParser.parse(json, matArray);
+                } catch (PlanParseException e) {
+                    logger.warning("JSON parse error: " + e.getMessage());
+                    if (e.getJsonSnippet() != null && !e.getJsonSnippet().isBlank()) {
+                        logger.warning("JSON snippet: " + e.getJsonSnippet());
+                    }
+                    sendErrorSync(p, "Failed to parse AI response");
                     return;
                 }
 
                 if (plan == null || plan.blocks == null || plan.size == null) {
-                    sendErrorSync(p, "AI returned invalid plan.");
+                    logger.warning("AI returned invalid plan structure");
+                    sendErrorSync(p, "AI returned invalid plan");
                     return;
                 }
+                
                 if (plan.blocks.size() > maxBlocks) {
-                    sendErrorSync(p, "Plan too large (" + plan.blocks.size() + " blocks).");
+                    logger.info(String.format("Plan rejected: %d blocks exceeds limit of %d", 
+                        plan.blocks.size(), maxBlocks));
+                    sendErrorSync(p, String.format("Plan too large: %d blocks (max %d)", 
+                        plan.blocks.size(), maxBlocks));
                     return;
                 }
 
-                String validationError = BuildValidator.validate(plan);
-                if (validationError != null) {
-                    sendErrorSync(p, "Invalid AI plan: " + validationError);
+                try {
+                    BuildValidator.validate(plan);
+                } catch (BuildValidationException e) {
+                    logger.warning("Build validation failed: " + e.getMessage());
+                    sendErrorSync(p, "Invalid plan: " + e.getMessage());
                     return;
+                }
+
+                long totalTime = System.currentTimeMillis() - startTime;
+                if (config.isDebugLoggingEnabled()) {
+                    logger.info(String.format("Build plan validated: %d blocks in %dx%dx%d (total %dms)", 
+                        plan.blocks.size(), plan.size.x, plan.size.y, plan.size.z, totalTime));
                 }
 
                 // place on main thread
@@ -133,8 +158,23 @@ public class AIBuildCommand implements CommandExecutor {
                     );
                 });
 
+            } catch (OpenAIException e) {
+                logger.severe("OpenAI API error: " + e.getMessage());
+                String userMsg;
+                if (e.isAuthError()) {
+                    userMsg = "API authentication failed - check server configuration";
+                } else if (e.isRateLimited()) {
+                    userMsg = "Rate limited - try again later";
+                } else if (e.isTimeout()) {
+                    userMsg = "Request timed out - try a simpler build";
+                } else {
+                    userMsg = "AI service error - try again";
+                }
+                sendErrorSync(p, userMsg);
             } catch (Exception e) {
-                sendErrorSync(p, "Error: " + e.getMessage());
+                logger.severe("Unexpected error: " + e.getMessage());
+                e.printStackTrace();
+                sendErrorSync(p, "An unexpected error occurred");
             }
         });
 
@@ -163,47 +203,5 @@ public class AIBuildCommand implements CommandExecutor {
 
     private String formatError(String message) {
         return ChatColor.DARK_RED + "[AIBuild] " + ChatColor.RED + message;
-    }
-
-    // DTOs matching AI JSON - optimized compact format
-    public static class BuildPlan {
-        public String name;
-        public Size size;
-        public List<BlockSpec> blocks;
-        
-        // Compact format parsing
-        public List<Double> s;  // [x, y, z]
-        public List<List<Number>> b;  // [[x,y,z,m], ...]
-        
-        // Convert compact format to legacy format
-        public void expandCompact(String[] materialNames) {
-            if (s != null && b != null) {
-                size = new Size();
-                size.x = s.get(0).intValue();
-                size.y = s.get(1).intValue();
-                size.z = s.get(2).intValue();
-                
-                blocks = new ArrayList<>(b.size());
-                for (List<Number> block : b) {
-                    BlockSpec spec = new BlockSpec();
-                    spec.dx = block.get(0).intValue();
-                    spec.dy = block.get(1).intValue();
-                    spec.dz = block.get(2).intValue();
-                    int matId = block.get(3).intValue();
-                    spec.material = (matId >= 0 && matId < materialNames.length) 
-                        ? materialNames[matId] : materialNames[0];
-                    blocks.add(spec);
-                }
-            }
-        }
-    }
-
-    public static class Size {
-        public int x, y, z;
-    }
-
-    public static class BlockSpec {
-        public int dx, dy, dz;
-        public String material;
     }
 }

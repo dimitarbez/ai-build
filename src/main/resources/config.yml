@@ -36,3 +36,6 @@ build:
     - WHITE_BANNER
     - OAK_FENCE
     - OAK_FENCE_GATE
+
+debug:
+  enabled: false  # Enable timing and performance logs

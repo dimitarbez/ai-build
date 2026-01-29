@@ -1,5 +1,7 @@
 package com.example.aibuild;
 
+import com.example.aibuild.model.BuildPlan;
+import com.example.aibuild.model.BlockSpec;
 import org.bukkit.*;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
@@ -14,14 +16,14 @@ public class BlockPlacer {
             JavaPlugin plugin,
             Location origin,
             BlockFace facing,
-            AIBuildCommand.BuildPlan plan,
+            BuildPlan plan,
             Set<Material> allowed,
             int placePerTick,
             boolean replaceOnlyAir,
             Player player,
             BuildHistory history
     ) {
-        List<AIBuildCommand.BlockSpec> blocks = plan.blocks;
+        List<BlockSpec> blocks = plan.blocks;
         Deque<BuildHistory.PlacedBlock> placed = new ArrayDeque<>(blocks.size());
 
         new org.bukkit.scheduler.BukkitRunnable() {
@@ -32,7 +34,7 @@ public class BlockPlacer {
                 int end = Math.min(idx + placePerTick, blocks.size());
 
                 for (int i = idx; i < end; i++) {
-                    AIBuildCommand.BlockSpec b = blocks.get(i);
+                    BlockSpec b = blocks.get(i);
 
                     Material m = safeMaterial(b.material, allowed);
                     if (m == null) continue;

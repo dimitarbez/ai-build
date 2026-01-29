@@ -1,30 +1,36 @@
 package com.example.aibuild;
 
+import com.example.aibuild.service.ConfigService;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public class AIBuildPlugin extends JavaPlugin {
     private OpenAIClient openAIClient;
     private BuildHistory buildHistory;
+    private ConfigService configService;
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
 
+        this.configService = new ConfigService(getConfig());
+
         String apiKey = EnvConfig.getOpenAiApiKey();
         if (apiKey == null) {
-            apiKey = getConfig().getString("openai.api_key");
+            apiKey = configService.getApiKey();
         }
 
         this.openAIClient = new OpenAIClient(
                 apiKey,
-                getConfig().getString("openai.model", "gpt-4o"),
-                getConfig().getInt("openai.timeout_ms", 20000)
+                configService.getModel(),
+                configService.getTimeoutMs()
         );
 
         this.buildHistory = new BuildHistory();
 
         if (getCommand("aibuild") != null) {
-            getCommand("aibuild").setExecutor(new AIBuildCommand(this, openAIClient, buildHistory));
+            getCommand("aibuild").setExecutor(
+                new AIBuildCommand(this, openAIClient, buildHistory, configService)
+            );
         }
 
         getLogger().info("AIBuild v2 enabled.");
