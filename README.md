@@ -78,19 +78,80 @@ Examples:
 - `/aibuild build a stone tower 10 blocks tall`
 - `/aibuild make a bridge across this gap`
 
+### Undo Command
+
+Undo the last build:
+```
+/aibuild undo
+```
+
+## Configuration
+
+The plugin creates `plugins/AIBuild/config.yml` with these options:
+
+```yaml
+openai:
+  api_key: "sk-proj-PUT_YOUR_ACTUAL_KEY_HERE"
+  model: "gpt-4o-mini"
+  max_blocks: 500
+  timeout_ms: 60000
+
+build:
+  place_per_tick: 150           # Blocks placed per game tick
+  cooldown_seconds: 30          # Cooldown between builds
+  forward_offset_blocks: 3      # Distance in front of player
+  replace_only_air: true        # Only replace air blocks
+  allowed_materials:            # List of allowed materials
+    - OAK_PLANKS
+    - COBBLESTONE
+    # ... more materials
+
+debug:
+  enabled: false                # Enable performance timing logs
+```
+
 ## Project Structure
 
 ```
 src/main/java/com/example/aibuild/
-├── AIBuildCommand.java     # Main command handler
-├── AIBuildPlugin.java      # Plugin entry point
-├── BlockPlacer.java        # Block placement logic
-├── BuildHistory.java       # Build tracking
-├── BuildValidator.java     # Build validation
-├── EnvConfig.java          # Environment configuration
-├── OpenAIClient.java       # OpenAI API integration
-└── Rotation.java           # Block rotation utilities
+├── AIBuildCommand.java       # Main command handler
+├── AIBuildPlugin.java        # Plugin entry point
+├── BlockPlacer.java          # Block placement logic
+├── BuildHistory.java         # Build tracking
+├── BuildValidator.java       # Build validation
+├── EnvConfig.java            # Environment configuration
+├── OpenAIClient.java         # OpenAI API integration
+├── Rotation.java             # Block rotation utilities
+├── exception/
+│   ├── BuildValidationException.java
+│   ├── OpenAIException.java
+│   └── PlanParseException.java
+├── model/
+│   ├── BlockSpec.java
+│   ├── BuildPlan.java
+│   └── Size.java
+├── service/
+│   ├── ConfigService.java
+│   └── PlanParser.java
+└── util/
+    └── DebugTimer.java
 ```
+
+## Testing
+
+Run tests using Gradle:
+
+```bash
+./gradlew test
+```
+
+Test coverage includes:
+- **BuildValidator**: 18 unit tests for validation logic
+- **Rotation**: 17 unit tests for coordinate transformations
+- **PlanParser**: 6 unit tests for JSON parsing
+- **OpenAIException**: 7 unit tests for error handling
+
+See [REFACTORING.md](REFACTORING.md) for details on the production-ready improvements.
 
 ## Dependencies
 
